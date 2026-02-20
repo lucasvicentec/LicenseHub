@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS licenses (
   resource_id TEXT,
   resource_title TEXT,
   status TEXT NOT NULL DEFAULT 'active',
+  bound_fingerprint TEXT,
+  bound_ip TEXT,
+  first_validated_at INTEGER,
+  last_validated_at INTEGER,
+  validation_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   last_issued_at INTEGER,
@@ -61,6 +66,19 @@ CREATE TABLE IF NOT EXISTS licenses (
 CREATE INDEX IF NOT EXISTS idx_licenses_product_status ON licenses (product, status);
 CREATE INDEX IF NOT EXISTS idx_licenses_user_product ON licenses (user_id, product);
 `);
+
+function ensureColumn(columnName, ddl) {
+  const columns = db.prepare("PRAGMA table_info(licenses)").all().map(c => c.name);
+  if (!columns.includes(columnName)) {
+    db.exec(`ALTER TABLE licenses ADD COLUMN ${ddl}`);
+  }
+}
+
+ensureColumn("bound_fingerprint", "bound_fingerprint TEXT");
+ensureColumn("bound_ip", "bound_ip TEXT");
+ensureColumn("first_validated_at", "first_validated_at INTEGER");
+ensureColumn("last_validated_at", "last_validated_at INTEGER");
+ensureColumn("validation_count", "validation_count INTEGER NOT NULL DEFAULT 0");
 
 const qFindByKey = db.prepare("SELECT * FROM licenses WHERE license_key = ? LIMIT 1");
 const qFindByUserProduct = db.prepare("SELECT * FROM licenses WHERE user_id = ? AND product = ? LIMIT 1");
@@ -77,13 +95,13 @@ WHERE id = ?
 `);
 const qSetStatus = db.prepare("UPDATE licenses SET status = ?, updated_at = ? WHERE license_key = ?");
 const qListAll = db.prepare(`
-SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, created_at, updated_at, last_issued_at, issue_count
+SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, bound_ip, validation_count, created_at, updated_at, last_issued_at, issue_count
 FROM licenses
 ORDER BY updated_at DESC
 LIMIT ?
 `);
 const qListByProduct = db.prepare(`
-SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, created_at, updated_at, last_issued_at, issue_count
+SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, bound_ip, validation_count, created_at, updated_at, last_issued_at, issue_count
 FROM licenses
 WHERE product = ?
 ORDER BY updated_at DESC
@@ -101,7 +119,7 @@ WHERE product = ?
 GROUP BY status
 `);
 const qSearchAll = db.prepare(`
-SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, created_at, updated_at, last_issued_at, issue_count
+SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, bound_ip, validation_count, created_at, updated_at, last_issued_at, issue_count
 FROM licenses
 WHERE (
   license_key LIKE ?
@@ -115,7 +133,7 @@ ORDER BY updated_at DESC
 LIMIT 250
 `);
 const qSearchByProduct = db.prepare(`
-SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, created_at, updated_at, last_issued_at, issue_count
+SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, bound_ip, validation_count, created_at, updated_at, last_issued_at, issue_count
 FROM licenses
 WHERE product = ?
   AND (
@@ -127,6 +145,16 @@ WHERE product = ?
   )
 ORDER BY updated_at DESC
 LIMIT 250
+`);
+const qBindActivation = db.prepare(`
+UPDATE licenses
+SET bound_fingerprint = ?, bound_ip = ?, first_validated_at = ?, last_validated_at = ?, validation_count = validation_count + 1, updated_at = ?
+WHERE id = ?
+`);
+const qTouchValidation = db.prepare(`
+UPDATE licenses
+SET last_validated_at = ?, validation_count = validation_count + 1, updated_at = ?
+WHERE id = ?
 `);
 
 function nowTs() {
@@ -164,6 +192,14 @@ function parseBbbPayload(body) {
     versionNumber: norm(body.version_number || body.version),
     timestamp: norm(body.timestamp)
   };
+}
+
+function getRequestIp(req) {
+  const xff = norm(req.header("x-forwarded-for"));
+  if (xff) {
+    return xff.split(",")[0].trim();
+  }
+  return norm(req.ip || req.connection?.remoteAddress || "");
 }
 
 function resolveProductFromPayload(payload) {
@@ -258,14 +294,51 @@ app.post("/license/validate", (req, res) => {
   const body = req.body || {};
   const requestedProduct = norm(body.product).toLowerCase();
   const key = norm(body.external_key);
+  const serverFingerprint = norm(body.server_fingerprint);
+  const requestIp = getRequestIp(req);
   if (!key) {
     return res.json({ valid: false, reason: "missing_license_key" });
+  }
+  if (!serverFingerprint) {
+    return res.json({ valid: false, reason: "missing_server_fingerprint" });
   }
   const row = qFindByKey.get(key);
   if (!row) return res.json({ valid: false, reason: "unknown_license" });
   if (requestedProduct && row.product !== requestedProduct) return res.json({ valid: false, reason: "invalid_product" });
   if (row.status !== "active") return res.json({ valid: false, reason: `status_${row.status}` });
-  return res.json({ valid: true, reason: "ok", product: row.product, user_id: row.user_id, username: row.username || "" });
+
+  const ts = nowTs();
+  const boundFingerprint = norm(row.bound_fingerprint);
+  const boundIp = norm(row.bound_ip);
+
+  if (!boundFingerprint || !boundIp) {
+    qBindActivation.run(serverFingerprint, requestIp, ts, ts, ts, row.id);
+    return res.json({
+      valid: true,
+      reason: "ok",
+      product: row.product,
+      user_id: row.user_id,
+      username: row.username || "",
+      activation: "bound_new"
+    });
+  }
+
+  if (boundFingerprint !== serverFingerprint) {
+    return res.json({ valid: false, reason: "fingerprint_mismatch" });
+  }
+  if (boundIp !== requestIp) {
+    return res.json({ valid: false, reason: "ip_mismatch" });
+  }
+
+  qTouchValidation.run(ts, ts, row.id);
+  return res.json({
+    valid: true,
+    reason: "ok",
+    product: row.product,
+    user_id: row.user_id,
+    username: row.username || "",
+    activation: "already_bound"
+  });
 });
 
 app.post("/admin/revoke", authAdminApi, (req, res) => {

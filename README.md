@@ -7,6 +7,7 @@ Generic licensing API + web console for multiple plugins.
 - Validates license keys for plugin runtime checks.
 - Provides admin console (`/console`) to list/search/revoke/activate licenses.
 - Supports multiple plugins/products via `BBB_RESOURCE_PRODUCT_MAP`.
+- Enforces activation binding: 1 license key -> 1 server fingerprint + 1 public IP.
 
 ## Endpoints
 - `POST /bbb/license-key`
@@ -69,6 +70,11 @@ Response:
 ```json
 { "valid": true, "reason": "ok", "product": "coliseum" }
 ```
+
+Binding behavior:
+- First valid request binds `server_fingerprint` + requester IP to the license.
+- Later validations must match both.
+- If mismatched, API returns `fingerprint_mismatch` or `ip_mismatch`.
 
 ## Environment
 See `.env.example`.

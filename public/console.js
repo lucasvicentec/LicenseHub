@@ -25,6 +25,8 @@ function rowTemplate(row) {
     <td>${row.username || ""}</td>
     <td class="mono">${row.resource_id || ""}</td>
     <td>${row.issue_count || 0}</td>
+    <td class="mono">${row.bound_ip || "-"}</td>
+    <td>${row.validation_count || 0}</td>
     <td>${fmtTs(row.updated_at)}</td>
     <td>${action}</td>
   </tr>`;
