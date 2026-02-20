@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Coliseum License Console</title>
+  <link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Coliseum License Console</h1>
+    <form method="post" action="/logout">
+      <button type="submit">Logout</button>
+    </form>
+  </header>
+
+  <section class="stats">
+    <div class="stat"><span>Active</span><strong id="activeCount">0</strong></div>
+    <div class="stat"><span>Revoked</span><strong id="revokedCount">0</strong></div>
+    <div class="stat"><span>Suspended</span><strong id="suspendedCount">0</strong></div>
+  </section>
+
+  <section class="tools">
+    <input id="product" placeholder="Product filter (optional, e.g. coliseum)" />
+    <input id="search" placeholder="Search by key, user, username, resource..." />
+    <button id="refreshBtn">Refresh</button>
+  </section>
+
+  <section>
+    <table>
+      <thead>
+      <tr>
+        <th>Status</th>
+        <th>Product</th>
+        <th>License Key</th>
+        <th>User</th>
+        <th>Username</th>
+        <th>Resource</th>
+        <th>Issues</th>
+        <th>Updated</th>
+        <th>Action</th>
+      </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <script src="/assets/console.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+services:
+  coliseum-web:
+    build: .
+    container_name: coliseum-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data

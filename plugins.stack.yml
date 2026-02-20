@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  plugin-license-hub:
+    image: ghcr.io/lucasvicentec/licensehub:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - DATA_DIR=/data
+      - DB_PATH=/data/licenses.db
+      - DEFAULT_PRODUCT_ID=default-plugin
+      - BBB_SECRET=change_this_bbb_secret
+      - VALIDATE_SECRET=change_this_validate_secret
+      - ADMIN_SECRET=change_this_admin_secret
+      - PANEL_PASSWORD=change_this_console_password
+      - ALLOW_ISSUE_WITHOUT_SECRET=false
+      # JSON map: BuiltByBit resource_id -> plugin product id
+      # Example: {"123456":"coliseum","123457":"survivalcore"}
+      - BBB_RESOURCE_PRODUCT_MAP={}
+    volumes:
+      - /app/volumes/plugin-license-hub:/data
+    networks:
+      - shared_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  shared_network:
+    external: true
+    name: shared_network_v2
