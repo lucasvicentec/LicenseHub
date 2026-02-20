@@ -54,6 +54,64 @@ async function postAction(action, key) {
   });
 }
 
+async function loadBaseJars() {
+  const r = await fetch("/console/api/test/base");
+  const data = await r.json();
+  const list = (data.files || []).length ? data.files.join(", ") : "none";
+  document.getElementById("baseList").textContent = `Base JARs: ${list}`;
+}
+
+async function uploadBaseJar() {
+  const product = document.getElementById("testProduct").value.trim();
+  const fileInput = document.getElementById("testJar");
+  const file = fileInput.files[0];
+  if (!product || !file) {
+    document.getElementById("testResult").textContent = "Set product and choose a .jar file.";
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append("product", product);
+  fd.append("jar", file);
+
+  const r = await fetch("/console/api/test/base", {
+    method: "POST",
+    body: fd
+  });
+  const data = await r.json();
+  if (!r.ok || !data.ok) {
+    document.getElementById("testResult").textContent = `Upload failed: ${data.error || r.status}`;
+    return;
+  }
+  document.getElementById("testResult").textContent = `Base JAR uploaded for product '${data.product}': ${data.file}`;
+  await loadBaseJars();
+}
+
+async function generateInjectedJar() {
+  const payload = {
+    product: document.getElementById("testProduct").value.trim() || "coliseum",
+    user_id: document.getElementById("testUserId").value.trim() || `test-user-${Date.now()}`,
+    username: document.getElementById("testUsername").value.trim() || "testbuyer",
+    resource_id: document.getElementById("testResourceId").value.trim() || "123456",
+    version_number: document.getElementById("testVersion").value.trim() || "v-test"
+  };
+
+  const r = await fetch("/console/api/test/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await r.json();
+  if (!r.ok || !data.ok) {
+    document.getElementById("testResult").textContent = `Generate failed: ${data.error || r.status}`;
+    return;
+  }
+
+  document.getElementById("testResult").innerHTML = `Generated: <a href="${data.download_url}">${data.generated_file}</a> | Key: <span class="mono">${data.license_key}</span> | Replaced tokens: ${data.replaced_tokens}`;
+  await fetchOverview();
+  await fetchRows();
+}
+
 document.getElementById("refreshBtn").addEventListener("click", async () => {
   await fetchOverview();
   await fetchRows();
@@ -76,7 +134,12 @@ document.getElementById("rows").addEventListener("click", async (e) => {
   await fetchRows();
 });
 
+document.getElementById("uploadBaseBtn").addEventListener("click", uploadBaseJar);
+document.getElementById("reloadBaseBtn").addEventListener("click", loadBaseJars);
+document.getElementById("generateTestBtn").addEventListener("click", generateInjectedJar);
+
 (async () => {
   await fetchOverview();
   await fetchRows();
+  await loadBaseJars();
 })();

@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Coliseum License Console</title>
+  <title>Plugin License Console</title>
   <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
   <header class="topbar">
-    <h1>Coliseum License Console</h1>
+    <h1>Plugin License Console</h1>
     <form method="post" action="/logout">
       <button type="submit">Logout</button>
     </form>
@@ -24,6 +24,25 @@
     <input id="product" placeholder="Product filter (optional, e.g. coliseum)" />
     <input id="search" placeholder="Search by key, user, username, resource..." />
     <button id="refreshBtn">Refresh</button>
+  </section>
+
+  <section class="panel">
+    <h2>Test Injector (BBB-like)</h2>
+    <div class="row">
+      <input id="testProduct" placeholder="Product (e.g. coliseum)" />
+      <input id="testJar" type="file" accept=".jar" />
+      <button id="uploadBaseBtn">Upload Base JAR</button>
+      <button id="reloadBaseBtn">Reload Base JARs</button>
+    </div>
+    <div class="row">
+      <input id="testUserId" placeholder="User ID (e.g. 999999)" />
+      <input id="testUsername" placeholder="Username (e.g. testbuyer)" />
+      <input id="testResourceId" placeholder="Resource ID (e.g. 123456)" />
+      <input id="testVersion" placeholder="Version (e.g. v1.1.0)" />
+      <button id="generateTestBtn">Generate Injected JAR</button>
+    </div>
+    <div class="hint mono" id="baseList">Base JARs: -</div>
+    <div class="hint" id="testResult">-</div>
   </section>
 
   <section>

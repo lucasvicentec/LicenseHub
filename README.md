@@ -1,4 +1,4 @@
-﻿# Plugin License Hub
+# Plugin License Hub
 
 Generic licensing API + web console for multiple plugins.
 
@@ -7,7 +7,8 @@ Generic licensing API + web console for multiple plugins.
 - Validates license keys for plugin runtime checks.
 - Provides admin console (`/console`) to list/search/revoke/activate licenses.
 - Supports multiple plugins/products via `BBB_RESOURCE_PRODUCT_MAP`.
-- Enforces activation binding: 1 license key -> 1 server fingerprint + 1 public IP.
+- Enforces activation binding: `1 license key -> 1 server fingerprint + 1 public IP`.
+- Includes a **Test Injector** to simulate a BBB-injected download 1:1 before publishing.
 
 ## Endpoints
 - `POST /bbb/license-key`
@@ -17,12 +18,11 @@ Generic licensing API + web console for multiple plugins.
 - `GET /console` (password login)
 - `GET /health`
 
-## Product model
-- Each license has a `product` field.
-- Product resolution for BBB webhook:
-1. `body.product` if provided
-2. `BBB_RESOURCE_PRODUCT_MAP[resource_id]` if configured
-3. `DEFAULT_PRODUCT_ID`
+### Test Injector endpoints (console auth required)
+- `GET /console/api/test/base`
+- `POST /console/api/test/base` (multipart, field `jar`)
+- `POST /console/api/test/generate`
+- `GET /console/api/test/download/:token`
 
 ## Local run
 ```bash
@@ -37,22 +37,34 @@ Use `plugins.stack.yml`:
 docker stack deploy -c plugins.stack.yml plugins
 ```
 
-## GitHub Actions image publish
-- Workflow file: `.github/workflows/docker-publish.yml`
-- Publishes to: `ghcr.io/lucasvicentec/licensehub`
-- On push to `main`: publishes `:latest` and `:sha-<short>`
-- On tag `v*`: publishes tag image too
-
 ## BuiltByBit setup
 Create external license key placeholder:
-- Placeholder: `%%__COLISEUM_LICENSE__%%` (or your plugin alias)
+- Placeholder: `%%__COLISEUM_LICENSE__%%`
 - Type: `External license key`
 - Url: `https://api.yourdomain.com/bbb/license-key`
 - Secret: same as `BBB_SECRET`
 
 Recommended nonce aliases:
-- `%%__PLUGIN_NONCE_A__%%`
-- `%%__PLUGIN_NONCE_B__%%`
+- `%%__COLISEUM_NONCE_A__%%`
+- `%%__COLISEUM_NONCE_B__%%`
+
+## Test flow (BBB-like, before approval)
+1. Open `/console`.
+2. In **Test Injector**, set product (example: `coliseum`).
+3. Upload your base jar for that product.
+4. Fill user/resource/version test fields.
+5. Click **Generate Injected JAR**.
+6. Download the generated jar and use it in server `mods/`.
+
+The generator injects:
+- `%%__BUILTBYBIT__%%` -> `true`
+- `%%__USER__%%`, `%%__USERNAME__%%`
+- `%%__RESOURCE__%%`, `%%__RESOURCE_TITLE__%%`
+- `%%__VERSION__%%`, `%%__VERSION_NUMBER__%%`
+- `%%__TIMESTAMP__%%`
+- `%%__NONCE__%%`
+- `%%__COLISEUM_LICENSE__%%`
+- `%%__COLISEUM_NONCE_A__%%`, `%%__COLISEUM_NONCE_B__%%`
 
 ## Plugin validate request
 Your plugin should call:
@@ -62,19 +74,15 @@ Your plugin should call:
 ```json
 {
   "product": "coliseum",
-  "external_key": "..."
+  "external_key": "...",
+  "server_fingerprint": "..."
 }
 ```
 
-Response:
+Response example:
 ```json
 { "valid": true, "reason": "ok", "product": "coliseum" }
 ```
-
-Binding behavior:
-- First valid request binds `server_fingerprint` + requester IP to the license.
-- Later validations must match both.
-- If mismatched, API returns `fingerprint_mismatch` or `ip_mismatch`.
 
 ## Environment
 See `.env.example`.

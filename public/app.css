@@ -49,6 +49,32 @@ body {
   padding: 0 24px 16px;
 }
 
+.panel {
+  margin: 0 24px 16px;
+  padding: 12px;
+  border: 1px solid #273857;
+  border-radius: 8px;
+  background: #101a2d;
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.hint {
+  font-size: 13px;
+  color: #aac2df;
+  margin-top: 4px;
+}
+
 input, button {
   border: 1px solid #2d4164;
   background: #0f1728;
@@ -59,10 +85,15 @@ input, button {
 
 input {
   flex: 1;
+  min-width: 150px;
 }
 
 button {
   cursor: pointer;
+}
+
+a {
+  color: #6bc3ff;
 }
 
 table {

@@ -1,8 +1,10 @@
-﻿const crypto = require("crypto");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const cookieParser = require("cookie-parser");
+const multer = require("multer");
+const AdmZip = require("adm-zip");
 const Database = require("better-sqlite3");
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
@@ -15,6 +17,9 @@ const VALIDATE_SECRET = process.env.VALIDATE_SECRET || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 const PANEL_PASSWORD = process.env.PANEL_PASSWORD || "";
 const ALLOW_ISSUE_WITHOUT_SECRET = (process.env.ALLOW_ISSUE_WITHOUT_SECRET || "false").toLowerCase() === "true";
+
+const TEST_BASE_DIR = path.join(DATA_DIR, "test", "base");
+const TEST_OUTPUT_DIR = path.join(DATA_DIR, "test", "generated");
 
 function parseResourceProductMap(raw) {
   const value = (raw || "").trim();
@@ -41,6 +46,9 @@ if (!PANEL_PASSWORD) {
 }
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(TEST_BASE_DIR, { recursive: true });
+fs.mkdirSync(TEST_OUTPUT_DIR, { recursive: true });
+
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.exec(`
@@ -65,20 +73,33 @@ CREATE TABLE IF NOT EXISTS licenses (
 );
 CREATE INDEX IF NOT EXISTS idx_licenses_product_status ON licenses (product, status);
 CREATE INDEX IF NOT EXISTS idx_licenses_user_product ON licenses (user_id, product);
+CREATE TABLE IF NOT EXISTS test_builds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  product TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  username TEXT,
+  license_key TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  generated_name TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  download_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_test_builds_created ON test_builds (created_at DESC);
 `);
 
-function ensureColumn(columnName, ddl) {
-  const columns = db.prepare("PRAGMA table_info(licenses)").all().map(c => c.name);
+function ensureColumn(tableName, columnName, ddl) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all().map(c => c.name);
   if (!columns.includes(columnName)) {
-    db.exec(`ALTER TABLE licenses ADD COLUMN ${ddl}`);
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${ddl}`);
   }
 }
 
-ensureColumn("bound_fingerprint", "bound_fingerprint TEXT");
-ensureColumn("bound_ip", "bound_ip TEXT");
-ensureColumn("first_validated_at", "first_validated_at INTEGER");
-ensureColumn("last_validated_at", "last_validated_at INTEGER");
-ensureColumn("validation_count", "validation_count INTEGER NOT NULL DEFAULT 0");
+ensureColumn("licenses", "bound_fingerprint", "bound_fingerprint TEXT");
+ensureColumn("licenses", "bound_ip", "bound_ip TEXT");
+ensureColumn("licenses", "first_validated_at", "first_validated_at INTEGER");
+ensureColumn("licenses", "last_validated_at", "last_validated_at INTEGER");
+ensureColumn("licenses", "validation_count", "validation_count INTEGER NOT NULL DEFAULT 0");
 
 const qFindByKey = db.prepare("SELECT * FROM licenses WHERE license_key = ? LIMIT 1");
 const qFindByUserProduct = db.prepare("SELECT * FROM licenses WHERE user_id = ? AND product = ? LIMIT 1");
@@ -156,6 +177,24 @@ UPDATE licenses
 SET last_validated_at = ?, validation_count = validation_count + 1, updated_at = ?
 WHERE id = ?
 `);
+const qInsertTestBuild = db.prepare(`
+INSERT INTO test_builds (
+  token, product, user_id, username, license_key, source_name, generated_name, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const qListTestBuilds = db.prepare(`
+SELECT token, product, user_id, username, license_key, source_name, generated_name, created_at, download_count
+FROM test_builds
+ORDER BY created_at DESC
+LIMIT 100
+`);
+const qFindTestBuild = db.prepare(`
+SELECT token, product, user_id, username, license_key, source_name, generated_name, created_at, download_count
+FROM test_builds
+WHERE token = ?
+LIMIT 1
+`);
+const qTouchTestDownload = db.prepare("UPDATE test_builds SET download_count = download_count + 1 WHERE token = ?");
 
 function nowTs() {
   return Math.floor(Date.now() / 1000);
@@ -229,8 +268,81 @@ function authPanel(req, res, next) {
   return next();
 }
 
+function toProduct(value) {
+  const raw = norm(value).toLowerCase();
+  const safe = raw.replace(/[^a-z0-9\-_]/g, "");
+  return safe || DEFAULT_PRODUCT_ID;
+}
+
+function getOrCreateLicense(product, userId, username, resourceId, resourceTitle) {
+  const ts = nowTs();
+  const current = qFindByUserProduct.get(userId, product);
+  if (current) {
+    qTouchIssue.run(
+      username || current.username || "",
+      resourceId || current.resource_id || "",
+      resourceTitle || current.resource_title || "",
+      ts,
+      ts,
+      current.id
+    );
+    return current.license_key;
+  }
+  const key = issueKey(product, userId, resourceId || "unknown");
+  qInsert.run(key, product, userId, username || "", resourceId || "", resourceTitle || "", ts, ts, ts);
+  return key;
+}
+
+function generateNonce() {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function getBaseJarPath(product) {
+  return path.join(TEST_BASE_DIR, `${product}.jar`);
+}
+
+function injectPlaceholdersToJar(sourcePath, targetPath, replacements) {
+  const zip = new AdmZip(sourcePath);
+  const entries = zip.getEntries();
+  let replacedTokens = 0;
+  let touchedEntries = 0;
+
+  for (const entry of entries) {
+    if (entry.isDirectory) continue;
+    const original = entry.getData().toString("utf8");
+    if (!original.includes("%%__")) continue;
+
+    let updated = original;
+    let changed = false;
+    for (const [token, value] of Object.entries(replacements)) {
+      if (!token) continue;
+      if (updated.includes(token)) {
+        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const rx = new RegExp(escaped, "g");
+        const count = (updated.match(rx) || []).length;
+        if (count > 0) {
+          replacedTokens += count;
+          updated = updated.replace(rx, value);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      touchedEntries += 1;
+      zip.updateFile(entry.entryName, Buffer.from(updated, "utf8"));
+    }
+  }
+
+  zip.writeZip(targetPath);
+  return { touchedEntries, replacedTokens };
+}
+
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+const upload = multer({
+  limits: { fileSize: 200 * 1024 * 1024 }
+});
+
+app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use("/assets", express.static(path.join(__dirname, "..", "public")));
@@ -256,32 +368,7 @@ app.post("/bbb/license-key", (req, res) => {
   }
 
   const product = resolveProductFromPayload(p);
-  const ts = nowTs();
-  const current = qFindByUserProduct.get(p.userId, product);
-  if (current) {
-    qTouchIssue.run(
-      p.username || current.username || "",
-      p.resourceId || current.resource_id || "",
-      p.resourceTitle || current.resource_title || "",
-      ts,
-      ts,
-      current.id
-    );
-    return sendTextKey(res, current.license_key);
-  }
-
-  const key = issueKey(product, p.userId, p.resourceId || "unknown");
-  qInsert.run(
-    key,
-    product,
-    p.userId,
-    p.username,
-    p.resourceId,
-    p.resourceTitle,
-    ts,
-    ts,
-    ts
-  );
+  const key = getOrCreateLicense(product, p.userId, p.username, p.resourceId, p.resourceTitle);
   return sendTextKey(res, key);
 });
 
@@ -424,6 +511,90 @@ app.post("/console/api/activate", authPanel, (req, res) => {
   if (!key) return res.status(400).json({ ok: false, error: "missing_license_key" });
   qSetStatus.run("active", nowTs(), key);
   res.json({ ok: true });
+});
+
+app.get("/console/api/test/base", authPanel, (_req, res) => {
+  const files = fs.readdirSync(TEST_BASE_DIR, { withFileTypes: true })
+    .filter(d => d.isFile() && d.name.toLowerCase().endsWith(".jar"))
+    .map(d => d.name)
+    .sort();
+  res.json({ files });
+});
+
+app.post("/console/api/test/base", authPanel, upload.single("jar"), (req, res) => {
+  const product = toProduct((req.body || {}).product);
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ ok: false, error: "missing_jar_file" });
+  }
+  const targetPath = getBaseJarPath(product);
+  fs.writeFileSync(targetPath, req.file.buffer);
+  res.json({ ok: true, product, file: path.basename(targetPath) });
+});
+
+app.get("/console/api/test/builds", authPanel, (_req, res) => {
+  res.json(qListTestBuilds.all());
+});
+
+app.post("/console/api/test/generate", authPanel, (req, res) => {
+  const body = req.body || {};
+  const product = toProduct(body.product);
+  const userId = norm(body.user_id || body.user || `test-user-${Date.now()}`);
+  const username = norm(body.username || "test-user");
+  const resourceId = norm(body.resource_id || "test-resource");
+  const resourceTitle = norm(body.resource_title || "Test Download");
+  const versionNumber = norm(body.version_number || "v-test");
+
+  const baseJarPath = getBaseJarPath(product);
+  if (!fs.existsSync(baseJarPath)) {
+    return res.status(400).json({ ok: false, error: "base_jar_not_found", expected: path.basename(baseJarPath) });
+  }
+
+  const licenseKey = getOrCreateLicense(product, userId, username, resourceId, resourceTitle);
+  const ts = nowTs();
+  const token = crypto.randomBytes(8).toString("hex");
+  const generatedName = `${product}-${ts}-${token}.jar`;
+  const outputPath = path.join(TEST_OUTPUT_DIR, generatedName);
+
+  const replacements = {
+    "%%__BUILTBYBIT__%%": "true",
+    "%%__USER__%%": userId,
+    "%%__USERNAME__%%": username,
+    "%%__RESOURCE__%%": resourceId,
+    "%%__RESOURCE_TITLE__%%": resourceTitle,
+    "%%__VERSION__%%": "0",
+    "%%__VERSION_NUMBER__%%": versionNumber,
+    "%%__TIMESTAMP__%%": String(ts),
+    "%%__NONCE__%%": generateNonce(),
+    "%%__COLISEUM_LICENSE__%%": licenseKey,
+    "%%__COLISEUM_NONCE_A__%%": generateNonce(),
+    "%%__COLISEUM_NONCE_B__%%": generateNonce()
+  };
+
+  const injection = injectPlaceholdersToJar(baseJarPath, outputPath, replacements);
+  qInsertTestBuild.run(token, product, userId, username, licenseKey, path.basename(baseJarPath), generatedName, ts);
+
+  res.json({
+    ok: true,
+    token,
+    product,
+    license_key: licenseKey,
+    generated_file: generatedName,
+    download_url: `/console/api/test/download/${token}`,
+    replaced_tokens: injection.replacedTokens,
+    touched_entries: injection.touchedEntries
+  });
+});
+
+app.get("/console/api/test/download/:token", authPanel, (req, res) => {
+  const token = norm(req.params.token);
+  if (!token) return res.status(400).send("missing token");
+  const row = qFindTestBuild.get(token);
+  if (!row) return res.status(404).send("not found");
+  const filePath = path.join(TEST_OUTPUT_DIR, row.generated_name);
+  if (!fs.existsSync(filePath)) return res.status(404).send("file missing");
+
+  qTouchTestDownload.run(token);
+  res.download(filePath, row.generated_name);
 });
 
 app.get("/", (_req, res) => res.redirect("/console"));
