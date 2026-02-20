@@ -115,6 +115,16 @@ SET username = ?, resource_id = ?, resource_title = ?, updated_at = ?, last_issu
 WHERE id = ?
 `);
 const qSetStatus = db.prepare("UPDATE licenses SET status = ?, updated_at = ? WHERE license_key = ?");
+const qResetBinding = db.prepare(`
+UPDATE licenses
+SET bound_fingerprint = NULL,
+    bound_ip = NULL,
+    first_validated_at = NULL,
+    last_validated_at = NULL,
+    validation_count = 0,
+    updated_at = ?
+WHERE license_key = ?
+`);
 const qListAll = db.prepare(`
 SELECT id, license_key, product, user_id, username, resource_id, resource_title, status, bound_ip, validation_count, created_at, updated_at, last_issued_at, issue_count
 FROM licenses
@@ -442,6 +452,13 @@ app.post("/admin/activate", authAdminApi, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/admin/reset-binding", authAdminApi, (req, res) => {
+  const key = norm((req.body || {}).license_key);
+  if (!key) return res.status(400).json({ ok: false, error: "missing_license_key" });
+  qResetBinding.run(nowTs(), key);
+  res.json({ ok: true });
+});
+
 app.get("/login", (_req, res) => {
   res.type("html").send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -510,6 +527,13 @@ app.post("/console/api/activate", authPanel, (req, res) => {
   const key = norm((req.body || {}).license_key);
   if (!key) return res.status(400).json({ ok: false, error: "missing_license_key" });
   qSetStatus.run("active", nowTs(), key);
+  res.json({ ok: true });
+});
+
+app.post("/console/api/reset-binding", authPanel, (req, res) => {
+  const key = norm((req.body || {}).license_key);
+  if (!key) return res.status(400).json({ ok: false, error: "missing_license_key" });
+  qResetBinding.run(nowTs(), key);
   res.json({ ok: true });
 });
 

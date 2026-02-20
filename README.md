@@ -15,6 +15,7 @@ Generic licensing API + web console for multiple plugins.
 - `POST /license/validate`
 - `POST /admin/revoke` (header `X-Admin-Secret`)
 - `POST /admin/activate` (header `X-Admin-Secret`)
+- `POST /admin/reset-binding` (header `X-Admin-Secret`)
 - `GET /console` (password login)
 - `GET /health`
 
@@ -23,6 +24,7 @@ Generic licensing API + web console for multiple plugins.
 - `POST /console/api/test/base` (multipart, field `jar`)
 - `POST /console/api/test/generate`
 - `GET /console/api/test/download/:token`
+- `POST /console/api/reset-binding`
 
 ## Local run
 ```bash

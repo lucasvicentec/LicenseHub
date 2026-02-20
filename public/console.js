@@ -14,9 +14,10 @@ async function fetchOverview() {
 }
 
 function rowTemplate(row) {
-  const action = row.status === "active"
+  const statusAction = row.status === "active"
     ? `<button data-k="${row.license_key}" data-a="revoke">Revoke</button>`
     : `<button data-k="${row.license_key}" data-a="activate">Activate</button>`;
+  const action = `${statusAction} <button data-k="${row.license_key}" data-a="reset-binding">Reset Fingerprint</button>`;
   return `<tr>
     <td>${row.status}</td>
     <td class="mono">${row.product || ""}</td>
@@ -46,7 +47,15 @@ async function fetchRows() {
 }
 
 async function postAction(action, key) {
-  const url = action === "revoke" ? "/console/api/revoke" : "/console/api/activate";
+  const url = action === "revoke"
+    ? "/console/api/revoke"
+    : action === "activate"
+      ? "/console/api/activate"
+      : "/console/api/reset-binding";
+  if (action === "reset-binding") {
+    const confirmed = window.confirm(`Reset fingerprint/IP binding for license ${key}?`);
+    if (!confirmed) return;
+  }
   await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
